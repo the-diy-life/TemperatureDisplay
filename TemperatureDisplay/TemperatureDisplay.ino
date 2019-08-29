@@ -26,7 +26,6 @@
 // Date and time functions using a DS1307 RTC connected via I2C and Wire lib
 #include <avr/io.h>  //standard AVR header
 #include <stdio.h>
-//#include <time.h>
 
 #include "RTClib.h"
 
@@ -34,11 +33,8 @@
 
 RTC_DS1307 rtc;
 
-char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
-
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
-
 
 /// using hardware SPI:
 #define OLED_DC    9
@@ -53,11 +49,20 @@ char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursd
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &SPI,
                          OLED_DC, OLED_RESET, OLED_CS);
 
-#define NUMFLAKES     10 // Number of snowflakes in the animation example
+//#define NUMFLAKES     10 // Number of snowflakes in the animation example
 
 #define LOGO_HEIGHT   16
 #define LOGO_WIDTH    16
 
+// enum for application state
+enum state {
+  BEGIN_STATE,
+  INITIAL_STATE,
+  WAIT_STATE,
+  LOOP_STATE
+};
+
+// the DIY life logo in hex.
 static const unsigned char PROGMEM DIYlogo_bmp[] =
 {
   0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
@@ -145,19 +150,68 @@ static const unsigned char PROGMEM DIYlogo_bmp[] =
   };
 */
 
-//char Time[]     = "  :  :  ";
-char Time[]     = "  :  ";
-char Date[]     = "  '/'  '/'    ";
+char Time[]     = "  :  "; // char array for the time
+char Date[]     = "  '/'  '/'    "; // char array for the time
+
 byte second, minute, hour;
 
-unsigned int data;
+unsigned int data; // to read the temperature analog data and save it to data variable
 
 volatile int second_pass = 0 ;
 int seconds, minutes, hours, timerStep, days, months, years;
 void T1Delay ();
 
-int turn_up_time = 0;
-int last_time = 0;
+long turn_up_time = 0;
+int last_time, delay_time = 0;
+int wite_time = 0;
+
+// 2 objects from state enum to carry the current state and last state
+enum state app_state,last_state;
+
+// write a temp. word to the screen
+void displayStaticText(int temprature)
+{
+  char str[12];
+  snprintf(str, 12, "Temp.: %d", temprature);
+  display.setTextSize(2); // Draw 2X-scale text
+  display.setTextColor(WHITE);
+  display.fillRect(94, 40, 36, 16, BLACK);
+  display.display();      // Show initial text
+  display.setCursor(10, 40);
+  display.print(str);
+  display.println();
+  display.display();      // Show initial text
+}
+
+// display the temprature and time
+void displayTemp(int temprature, char *text) {
+  char str[12];
+  snprintf(str, 12, "%d", temprature);
+  display.setTextSize(2); // Draw 2X-scale text
+  display.setTextColor(WHITE);
+  display.fillRect(30, 20, 60, 16, BLACK);
+  display.setCursor(30, 20);
+  display.print(text);
+  //Desired text size. 1 is default 6x8, 2 is 12x16, 3 is 18x24, etc
+  // We start the line from 10 pixels and clac the space for 7 characters *12 =84 + 10 Then the size of the text that will change
+  display.fillRect(94, 40, 36, 16, BLACK);
+  display.display();      // Show initial text
+  display.setCursor(94, 40);
+  display.print(str);
+  display.println();
+  display.display();      // Show initial text  
+}
+
+// write the date to the oled
+void displayDate(char *text) {
+
+  display.setTextSize(2); // Draw 2X-scale text
+  display.setTextColor(WHITE);
+  display.setCursor(5, 0);
+  display.print(text);
+  display.println();
+  display.display();      // Show initial text
+}
 
 void setup() {
 
@@ -171,6 +225,7 @@ void setup() {
   months = 0;
   years = 0;
 
+ //Start the RTC and get the compile date and time from it.
   if (! rtc.begin()) {
     Serial.println("Couldn't find RTC");
     while (1);
@@ -183,6 +238,8 @@ void setup() {
     // January 21, 2014 at 3am you would call:
     //rtc.adjust(DateTime(2019, 8, 19, 11, 30, 0));
   }
+  
+  //make a variable DateTime from rtc.now() to get the date time details
   Serial.print("The time is : ");
   DateTime now = rtc.now();
   seconds = now.second();
@@ -190,56 +247,36 @@ void setup() {
   hours = now.hour();
   days = now.day();
   months = now.month();
-  years = now.year();
+  years = now.year();  
 
-  //  snprintf(Time, 9, "%02d:%02d:%02d", now.hour(), now.minute(), now.second());
-  //  Serial.println(Time);
-
+  // add the time to time array
   snprintf(Time, 9, "%02d:%02d", now.hour(), now.minute());
   Serial.println(Time);
 
+  // add the Date to Date array
   snprintf(Date, 11, "%02d/%02d/%02d", now.day(), now.month(), now.year());
   Serial.println(Date);
+
+  DDRC   = 0X00;  // make Port C an input
+  ADCSRA = 0x87;  // make ADC enable and select CLK/128
+  ADMUX  = 0xE0;  // 2.56V Vref and ADC0 data will be left-justified
+  //ADMUX  = 0xC0; // 2.56V Vref internal, right justified, select ADC Channel 0
+
+  ADCSRA |= (1 << ADSC) ;          // start conversion
+  while ( (ADCSRA & (1 << ADIF)) == 0 ); // wait for end
+  data  = ADCH / 3; //The 10-bit output of the A/D is divided by 3 to get the real temperature.
+
 
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
   if (!display.begin(SSD1306_SWITCHCAPVCC)) {
     Serial.println(F("SSD1306 allocation failed"));
     for (;;); // Don't proceed, loop forever
   }
-
-  // Show initial display buffer contents on the screen --
-  // the library initializes this with an Adafruit splash screen.
   display.display();
-  delay(2000); // Pause for 2 seconds
 
-  // Clear the buffer
-  display.clearDisplay();
-
-  //  // Draw a single pixel in white
-  //  display.drawPixel(10, 10, WHITE);
-  //
-  //  // Show the display buffer on the screen. You MUST call display() after
-  //  // drawing commands to make them visible on screen!
-  //  display.display();
-  //  delay(2000);
-
-
-  // Invert and restore display, pausing in-between
-  //  display.invertDisplay(true);
-  //  delay(1000);
-  //  display.invertDisplay(false);
-  //  delay(1000);
-
-  //display.clearDisplay();
-
-  display.drawBitmap(25, 1, DIYlogo_bmp, 78, 62, WHITE);
-  display.display();
-  delay(2000);
-
-  DDRC   = 0X00;  // make Port C an input
-  ADCSRA = 0x87;  // make ADC enable and select CLK/128
-  ADMUX  = 0xE0;  // 2.56V Vref and ADC0 data will be left-justified
-  //ADMUX  = 0xC0; // 2.56V Vref internal, right justified, select ADC Channel 0
+ // set the app_state to first state after begin the oled
+  app_state = BEGIN_STATE;
+  last_state = BEGIN_STATE;
 
   cli(); // disable global interrupts
 
@@ -253,41 +290,11 @@ void setup() {
   TIMSK1 = 0b00000010;// |= (1 << OCIE0A);
   TCNT1  = 0; // sET THE compare match flag to 0
   sei(); // enable global interrupts
-
-  /*
-    cli(); // disable global interrupts
-
-    TCCR2A = 0b00000000;//0; // set entire TCCR1A register to 0
-    TCCR2B = 0b00000111; // same for
-    // enable timer compare interrupt:
-    TIMSK2 = 0b00000001;// |= (1 << OCIE0A);
-    sei(); // enable global interrupts
-  */
-
-  ADCSRA |= (1 << ADSC) ;          // start conversion
-  while ( (ADCSRA & (1 << ADIF)) == 0 ); // wait for end
-  data  = ADCH / 3; //The 10-bit output of the A/D is divided by 4 to get the real temperature.
-
-  display.clearDisplay();
-
-  displayStaticText(data);
-  displayDate(Date);
-  snprintf(Time, 9, "%02d:%02d", hours, minutes);
-  displayTemp(data, Time);
 }
 
-//ISR(TIMER2_OVF_vect)
+// Interrupt Service Routine
 ISR (TIMER1_COMPA_vect)    // Timer1 ISR
-{
-  //  timerStep++;
-  //  if (timerStep == 62)
-  //  {
-  //    timerStep = 0;
-  //    seconds++;
-  //    //minutes++;
-  //    second_pass = 1;
-  //  }
-  turn_up_time++;
+{  
   second_pass = 1;
   seconds++;
   if (seconds == 60)
@@ -300,136 +307,70 @@ ISR (TIMER1_COMPA_vect)    // Timer1 ISR
     hours = hours + 1;
     minutes = 0;
   }
+  turn_up_time++;
 }
 
-//ISR(TIMER2_OVF_vect)
-//{
-//  //  DateTime now = rtc.now();
-//  timerStep++;
-//  if (timerStep == 62)
-//  {
-//    timerStep = 0;
-//    seconds++;
-//    pr_seconds = 1;
-//    //PORTB ^= 0x20;
-//    //    Serial.println(" second ");
-//    //    Serial.println(minutes);
-//  }
-//
-//  //PORTB ^= 0x20;    // toggle PORTB.5
-//  //seconds = seconds + 1;
-//  //if (seconds == 3000)
-//  if (seconds == 60)
-//  {
-//    minutes = minutes + 1;
-//    seconds = 0;
-//  }
-//  if (minutes == 60)
-//  {
-//    hours = hours + 1;
-//    minutes = 0;
-//  }
-//  //  Serial.print("time now: ");
-//  //  Serial.print(hours);
-//  //  Serial.print(":");
-//  //  Serial.print(minutes);
-//  //  Serial.print(":");
-//  //  Serial.println(seconds);
-//  //  pr_seconds = 0 ;
-//  //  snprintf(Time, 9, "%02d:%02d:%02d", hours, minutes, seconds);
-//  //snprintf(Time, 9, "%02d:%02d", hours, minutes);
-//
-//
-//
-//}
+void loop() { 
 
-void loop() {
-  if (second_pass == 1) {
-    // Clear the buffer
-    //display.clearDisplay();
-    second_pass = 0;
-    ADCSRA |= (1 << ADSC) ;          // start conversion
-    while ( (ADCSRA & (1 << ADIF)) == 0 ); // wait for end
-    data  = ADCH / 3; //The 10-bit output of the A/D is divided by 4 to get the real temperature.
-    displayDate(Date);
-    snprintf(Time, 9, "%02d:%02d", hours, minutes);
-    displayTemp(data, Time);
-    Serial.println(" minute ");
-    Serial.println(minutes);
+  // switch case to handle the 3 pages that will display on the OLED
+  switch (app_state) {
+    case BEGIN_STATE:    // First state show the adafruit logo
+      last_state = BEGIN_STATE;
+      app_state = WAIT_STATE;
+      wite_time = 3;
+      delay_time = 0;
+      turn_up_time = 0;
+      break;  
+    case INITIAL_STATE:  // Second state show the DIYLife logo
+      display.drawBitmap(25, 1, DIYlogo_bmp, 78, 62, WHITE);
+      display.display();
+      last_state = INITIAL_STATE;
+      app_state = WAIT_STATE;
+      wite_time = 2;
+      break;
+    case WAIT_STATE:  // Third state gife time before clear the display
+      if (turn_up_time - delay_time >= wite_time) // Wait for 2 seconds
+      {
+        // Check the last state BEGIN_STATE or INITIAL_STATE 
+        if (last_state == BEGIN_STATE){   
+          app_state = INITIAL_STATE;
+          last_state = WAIT_STATE;
+        }
+        if (last_state == INITIAL_STATE) {         
+          app_state = LOOP_STATE;
+          last_state = WAIT_STATE;
+        }
+        delay_time = turn_up_time;
+        display.clearDisplay();
+      }      
+      break;
+    case LOOP_STATE: // Forth and last state read and display the temperature with the date and time for ever.
+      last_state = LOOP_STATE;
+      if (second_pass == 1) {
+        // Clear the buffer
+        //display.clearDisplay();
+        second_pass = 0;
+        ADCSRA |= (1 << ADSC) ;          // start conversion
+        while ( (ADCSRA & (1 << ADIF)) == 0 ); // wait for end
+        data  = ADCH / 3; //The 10-bit output of the A/D is divided by 4 to get the real temperature.
+        displayStaticText(data);
+        displayDate(Date);
+        snprintf(Time, 9, "%02d:%02d", hours, minutes);
+        displayTemp(data, Time);
+      }
   }
 
   // Get the date from RTC every 15 minutes
-  if(turn_up_time - last_time == 900) // 1/4 hour 15 m * 60 s  
+  if (turn_up_time - last_time >= 900) // 1/4 hour 15 m * 60 s
   {
+    last_time = turn_up_time;
     DateTime now = rtc.now();
     days = now.day();
     months = now.month();
-    years = now.year();   
-
+    years = now.year();
     snprintf(Date, 11, "%02d/%02d/%02d", now.day(), now.month(), now.year());
     Serial.println(Date);
     displayDate(Date);
   }
 
-}
-
-void displayStaticText(int temprature)
-{
-  char str[12];
-  snprintf(str, 12, "Temp.: %d", temprature);
-  //display.clearDisplay();
-  //display.clearDisplay();
-  display.setTextSize(2); // Draw 2X-scale text
-  display.setTextColor(WHITE);
-  display.fillRect(94, 40, 36, 16, BLACK);
-  display.display();      // Show initial text
-  display.setCursor(10, 40);
-  display.print(str);
-  display.println();
-  display.display();      // Show initial text
-}
-
-void displayTemp(int temprature, char *text) {
-  char str[12];
-  snprintf(str, 12, "%d", temprature);
-  //display.clearDisplay();
-  //display.clearDisplay();
-  display.setTextSize(2); // Draw 2X-scale text
-  display.setTextColor(WHITE);
-  display.fillRect(30, 20, 60, 16, BLACK);
-  display.setCursor(30, 20);
-  display.print(text);
-  //Desired text size. 1 is default 6x8, 2 is 12x16, 3 is 18x24, etc
-  // We start the line from 10 pixels and clac the space for 7 characters *12 =84 + 10 Then the size of the text that will change
-  display.fillRect(94, 40, 36, 16, BLACK);
-  display.display();      // Show initial text
-  display.setCursor(94, 40);
-  display.print(str);
-  display.println();
-  display.display();      // Show initial text
-  //delay(100);
-}
-
-void displayDate(char *text) {
-
-  display.setTextSize(2); // Draw 2X-scale text
-  display.setTextColor(WHITE);
-  display.setCursor(5, 0);
-  display.print(text);
-  display.println();
-  display.display();      // Show initial text
-  //delay(100);
-}
-
-void helloOLED(void) {
-  display.clearDisplay();
-
-  display.setTextSize(2); // Draw 2X-scale text
-  display.setTextColor(WHITE);
-  display.setCursor(30, 0);            // Start at top-left corner
-  display.println(F("The"));
-  display.setCursor(15, 20);
-  display.println(F("DIY Life"));
-  display.display();      // Show initial text
-  delay(100);
 }
