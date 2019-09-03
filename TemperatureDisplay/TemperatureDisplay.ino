@@ -183,10 +183,10 @@ void displayStaticText(int temprature)
   display.display();      // Show initial text
 }
 
-// display the temprature and time
-void displayTemp(int temprature, char *text) {
+// display the temperature and time
+void displayTemp(int temperature, char *text) {
   char str[12];
-  snprintf(str, 12, "%d", temprature);
+  snprintf(str, 12, "%d", temperature);
   display.setTextSize(2); // Draw 2X-scale text
   display.setTextColor(WHITE);
   display.fillRect(30, 20, 60, 16, BLACK);
