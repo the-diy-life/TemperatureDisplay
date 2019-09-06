@@ -1,8 +1,8 @@
-# Temperature Display
+# AVR Temperature Display
 ----
 ## Description
 
-> This project uses used native AVR Registers with the Arduino Uno and Arduino IDE to display date, time and temperature on an OLED display.
+> In This project we used native AVR Registers with the Arduino Uno and Arduino IDE to display the date, time and temperature on an OLED display.
 
 ## External Libraries
 
